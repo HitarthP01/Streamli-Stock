@@ -1750,6 +1750,17 @@ class StockVisualizer:
         
         return fig
 
+def human_readable(num):
+    if num >= 1_000_000_000:
+        return f"{num/1_000_000_000:.2f}B"
+    elif num >= 1_000_000:
+        return f"{num/1_000_000:.2f}M"
+    elif num >= 1_000:
+        return f"{num/1_000:.2f}K"
+    else:
+        return str(num)
+
+
 def main():
     # Initialize components
     db_manager = DatabaseManager()
@@ -1760,46 +1771,47 @@ def main():
     st.markdown('<h1 class="main-header">📈 Advanced Stock Market Dashboard</h1>', unsafe_allow_html=True)
     
     # Sidebar
-    st.sidebar.title("⚙️ Dashboard Settings")
+    # st.sidebar.title("⚙️ Dashboard Settings")
     
     # Auto-refresh
-    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (5 min)", value=False)
-    if auto_refresh:
-        time.sleep(300)  # 5 minutes
-        st.rerun()
+    # auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (5 min)", value=False)
+    # if auto_refresh:
+    #     time.sleep(300)  # 5 minutes
+    #     st.rerun()
     
-    # Manual refresh
-    if st.sidebar.button("🔄 Refresh Data Now"):
-        st.cache_data.clear()
-        st.rerun()
+    # # Manual refresh
+    # if st.sidebar.button("🔄 Refresh Data Now"):
+    #     st.cache_data.clear()
+    #     st.rerun()
     
     # Data source selection
-    data_source = st.sidebar.radio(
-        "📊 Data Source:",
-        ["Live Data (Yahoo)", "Database Cache"]
-    )
+    # data_source = st.sidebar.radio(
+    #     "📊 Data Source:",
+    #     ["Live Data (Yahoo)", "Database Cache"]
+    # )
+    stocks_df = data_fetcher.fetch_most_active_stocks()
     
     # Fetch most active stocks
-    try:
-        if data_source == "Live Data (Yahoo)":
-            stocks_df = data_fetcher.fetch_most_active_stocks()
-        else:
-            with db_manager.get_connection() as conn:
-                today = datetime.now().strftime('%Y-%m-%d')
-                # today = "2025-08-27"
-                stocks_df = pd.read_sql_query(
-                    "SELECT * FROM most_active_stocks WHERE scrape_date = ? ORDER BY volume DESC",
-                    conn,
-                    params=(today,)
-                )
+    # try:
+    #     if data_source == "Live Data (Yahoo)":
+    #         stocks_df = data_fetcher.fetch_most_active_stocks()
+    #     else:
+    #         with db_manager.get_connection() as conn:
+    #             today = datetime.now().strftime('%Y-%m-%d')
+    #             # today = "2025-08-27"
+    #             stocks_df = pd.read_sql_query(
+    #                 "SELECT * FROM most_active_stocks WHERE scrape_date = ? ORDER BY volume DESC",
+    #                 conn,
+    #                 params=(today,)
+    #             )
         
-        if stocks_df is None or stocks_df.empty:
-            st.error("No stock data available. Please try refreshing or check your connection.")
-            return
+    #     if stocks_df is None or stocks_df.empty:
+    #         st.error("No stock data available. Please try refreshing or check your connection.")
+    #         return
         
-    except Exception as e:
-        st.error(f"Error loading stock data: {str(e)}")
-        return
+    # except Exception as e:
+    #     st.error(f"Error loading stock data: {str(e)}")
+    #     return
     
     # Market Overview
     st.subheader("📊 Market Overview")
@@ -1845,11 +1857,31 @@ def main():
             lambda x: f"+{x:.2f}%" if x > 0 else f"{x:.2f}%" if not pd.isna(x) else "N/A"
         )
     
-    st.dataframe(
+    # Remove unwanted columns - specify the columns you want to keep
+    columns_to_remove = ['week_52_range', 'Region', 'Follow', 'scrape_date']
+    # Filter to only include columns that actually exist in the DataFrame
+    # available_columns = [col for col in columns_to_remove if col in display_df.columns]
+    display_df = display_df.drop(columns=[col for col in columns_to_remove if col in display_df.columns])
+    
+    # volume column should be displayed in string human redable
+    display_df['volume'] = display_df['volume'].apply(human_readable)
+    
+    # Add clickable functionality with on_select
+    selected_rows = st.dataframe(
         display_df,
         use_container_width=True,
-        height=400
+        height=400,
+        on_select="rerun",
+        selection_mode="single-row"
     )
+    
+    # Check if a row was selected and get the symbol
+    selected_symbol_from_table = None
+    if selected_rows.selection.rows:
+        selected_row_index = selected_rows.selection.rows[0]
+        if selected_row_index < len(stocks_df):
+            selected_symbol_from_table = stocks_df.iloc[selected_row_index]['symbol']
+            st.info(f"📊 Selected: **{selected_symbol_from_table}** - Analysis will be shown below")
     
     # Stock Selection and Analysis
     st.subheader("📈 Individual Stock Analysis")
@@ -1858,11 +1890,15 @@ def main():
     
     with col1:
         if 'symbol' in stocks_df.columns and not stocks_df['symbol'].empty:
-            selected_symbol = st.selectbox(
-                "Select a stock for detailed analysis:",
-                options=stocks_df['symbol'].tolist(),
-                index=0
-            )
+            # Use selected symbol from table if available, otherwise use manual input
+            default_symbol = selected_symbol_from_table if selected_symbol_from_table else stocks_df['symbol'].tolist()[0]
+            selected_symbol = st.text_input(
+                "Enter stock symbol for detailed analysis:",
+                value=default_symbol,
+                placeholder="Type stock symbol (e.g., AAPL, MSFT, TSLA)...",
+                help="Enter any valid stock ticker symbol or click on a stock from the table above",
+                key="stock_search_input"
+            ).upper().strip()
         else:
             st.error("No stock symbols available")
             return
@@ -1944,12 +1980,15 @@ def main():
     
     with col1:
         if 'symbol' in stocks_df.columns and not stocks_df['symbol'].empty:
-            options_symbol = st.selectbox(
-                "Select a stock for options analysis:",
-                options=stocks_df['symbol'].tolist(),
-                index=0,
-                key="options_symbol_select"
-            )
+            # Use selected symbol from table if available, otherwise use manual input
+            default_options_symbol = selected_symbol_from_table if selected_symbol_from_table else stocks_df['symbol'].tolist()[0]
+            options_symbol = st.text_input(
+                "Enter stock symbol for options analysis:",
+                value=default_options_symbol,
+                placeholder="Type stock symbol (e.g., AAPL, MSFT, TSLA)...",
+                help="Enter any valid stock ticker symbol for options analysis or click on a stock from the table above",
+                key="options_stock_search_input"
+            ).upper().strip()
         else:
             st.error("No stock symbols available for options analysis")
             options_symbol = None
